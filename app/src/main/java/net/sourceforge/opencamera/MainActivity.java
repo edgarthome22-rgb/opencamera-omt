@@ -2318,6 +2318,19 @@ public class MainActivity extends AppCompatActivity implements PreferenceFragmen
         if (MyDebug.LOG)
             Log.d(TAG, "startOmtStreaming");
 
+        // Request microphone permission for OMT audio (stream continues video-only
+        // until granted; audio starts on the next stream start after permission)
+        {
+            SharedPreferences audioPrefs = PreferenceManager.getDefaultSharedPreferences(this);
+            boolean omtAudioEnabled = audioPrefs.getBoolean(PreferenceKeys.OmtAudioEnabledKey, true);
+            if (omtAudioEnabled
+                    && androidx.core.content.ContextCompat.checkSelfPermission(this,
+                            android.Manifest.permission.RECORD_AUDIO)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionHandler.requestRecordAudioPermission();
+            }
+        }
+
         // OMT streaming requires Camera2 API for ImageReader support
         if (!preview.usingCamera2API()) {
             Log.w(TAG, "OMT streaming requires Camera2 API - switching...");

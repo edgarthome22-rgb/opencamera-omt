@@ -416,4 +416,6 @@ public class PreferenceKeys {
     public static final String OmtStreamingQualityKey = "preference_omt_streaming_quality";
     public static final String OmtStreamingNameKey = "preference_omt_streaming_name";
     public static final String OmtAutoStartKey = "preference_omt_auto_start";
+    public static final String OmtAudioEnabledKey = "preference_omt_audio_enabled";
+    public static final String OmtAudioStereoKey = "preference_omt_audio_stereo";
 }

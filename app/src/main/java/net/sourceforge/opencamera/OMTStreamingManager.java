@@ -497,70 +497,104 @@ public class OMTStreamingManager {
     }
 
     /**
-     * Start microphone capture and send audio to OMT receivers (FPA1, 48kHz mono).
+     * Start microphone capture and send audio to OMT receivers (FPA1, 48kHz).
+     * Reads preferences: audio on/off and stereo/mono (stereo falls back to mono).
      * If RECORD_AUDIO permission is missing, streaming continues video-only.
      */
     private void startAudioCapture() {
         if (audioRunning) {
             return;
         }
+
+        android.content.SharedPreferences prefs =
+                android.preference.PreferenceManager.getDefaultSharedPreferences(context);
+        if (!prefs.getBoolean(PreferenceKeys.OmtAudioEnabledKey, true)) {
+            Log.i(TAG, "OMT audio disabled in settings - streaming video only");
+            return;
+        }
+        boolean wantStereo = prefs.getBoolean(PreferenceKeys.OmtAudioStereoKey, false);
+
         if (androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             Log.w(TAG, "RECORD_AUDIO permission not granted - streaming video only");
             return;
         }
 
-        final int channelConfig = AudioFormat.CHANNEL_IN_MONO;
         final int audioFormat = AudioFormat.ENCODING_PCM_16BIT;
-        int minBuffer = AudioRecord.getMinBufferSize(AUDIO_SAMPLE_RATE, channelConfig, audioFormat);
-        if (minBuffer == AudioRecord.ERROR || minBuffer == AudioRecord.ERROR_BAD_VALUE) {
-            Log.e(TAG, "AudioRecord.getMinBufferSize failed - streaming video only");
-            return;
-        }
-        int bufferSize = Math.max(minBuffer, AUDIO_SAMPLES_PER_FRAME * 4 /* bytes, headroom */);
+        int channels = wantStereo ? 2 : 1;
 
-        try {
-            audioRecord = new AudioRecord(
-                    MediaRecorder.AudioSource.CAMCORDER,
-                    AUDIO_SAMPLE_RATE,
-                    channelConfig,
-                    audioFormat,
-                    bufferSize);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to create AudioRecord: " + e.getMessage(), e);
-            audioRecord = null;
-            return;
+        // Try requested channel config, falling back stereo -> mono if needed
+        while (channels >= 1) {
+            int channelConfig = (channels == 2)
+                    ? AudioFormat.CHANNEL_IN_STEREO
+                    : AudioFormat.CHANNEL_IN_MONO;
+            int minBuffer = AudioRecord.getMinBufferSize(AUDIO_SAMPLE_RATE, channelConfig, audioFormat);
+            if (minBuffer != AudioRecord.ERROR && minBuffer != AudioRecord.ERROR_BAD_VALUE) {
+                int bufferSize = Math.max(minBuffer, AUDIO_SAMPLES_PER_FRAME * channels * 4);
+                try {
+                    audioRecord = new AudioRecord(
+                            MediaRecorder.AudioSource.CAMCORDER,
+                            AUDIO_SAMPLE_RATE,
+                            channelConfig,
+                            audioFormat,
+                            bufferSize);
+                    if (audioRecord.getState() == AudioRecord.STATE_INITIALIZED) {
+                        break; // Success
+                    }
+                    audioRecord.release();
+                    audioRecord = null;
+                } catch (Exception e) {
+                    Log.e(TAG, "AudioRecord create failed (" + channels + "ch): " + e.getMessage());
+                    audioRecord = null;
+                }
+            }
+            if (channels == 2) {
+                Log.w(TAG, "Stereo capture unavailable - falling back to mono");
+            }
+            channels--;
         }
 
-        if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+        if (audioRecord == null) {
             Log.e(TAG, "AudioRecord failed to initialize - streaming video only");
-            audioRecord.release();
-            audioRecord = null;
             return;
         }
 
+        final int captureChannels = channels;
         audioRunning = true;
         audioThread = new Thread(new Runnable() {
             @Override
             public void run() {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
-                short[] pcm = new short[AUDIO_SAMPLES_PER_FRAME];
-                float[] floats = new float[AUDIO_SAMPLES_PER_FRAME];
+                // AudioRecord delivers interleaved PCM16 (L R L R ...);
+                // OMT FPA1 requires planar float (all L, then all R)
+                short[] pcm = new short[AUDIO_SAMPLES_PER_FRAME * captureChannels];
+                float[] planar = new float[AUDIO_SAMPLES_PER_FRAME * captureChannels];
                 try {
                     audioRecord.startRecording();
-                    Log.i(TAG, "OMT audio capture started (48kHz mono FPA1)");
+                    Log.i(TAG, "OMT audio capture started (48kHz, " + captureChannels + "ch FPA1)");
                     while (audioRunning) {
-                        int read = audioRecord.read(pcm, 0, AUDIO_SAMPLES_PER_FRAME);
+                        int read = audioRecord.read(pcm, 0, pcm.length);
                         if (read <= 0) {
                             continue;
                         }
-                        // PCM16 -> float [-1.0, 1.0] (mono = already planar)
-                        for (int i = 0; i < read; i++) {
-                            floats[i] = pcm[i] / 32768.0f;
+                        int samplesPerChannel = read / captureChannels;
+                        if (samplesPerChannel <= 0) {
+                            continue;
+                        }
+                        if (captureChannels == 1) {
+                            for (int i = 0; i < samplesPerChannel; i++) {
+                                planar[i] = pcm[i] / 32768.0f;
+                            }
+                        } else {
+                            // Interleaved -> planar
+                            for (int i = 0; i < samplesPerChannel; i++) {
+                                planar[i] = pcm[i * 2] / 32768.0f;                       // L plane
+                                planar[samplesPerChannel + i] = pcm[i * 2 + 1] / 32768.0f; // R plane
+                            }
                         }
                         OMTSender sender = omtSender;
                         if (sender != null && isStreaming) {
-                            sender.sendAudioFrame(floats, AUDIO_SAMPLE_RATE, 1, read);
+                            sender.sendAudioFrame(planar, AUDIO_SAMPLE_RATE, captureChannels, samplesPerChannel);
                         }
                     }
                 } catch (Exception e) {

@@ -199,6 +199,22 @@
             android:dependency="preference_omt_streaming_enabled"
             />
 
+        <SwitchPreference
+            android:key="preference_omt_audio_enabled"
+            android:title="Enable Audio (Microphone)"
+            android:summary="Send microphone audio with the OMT stream (48kHz)"
+            android:defaultValue="true"
+            android:dependency="preference_omt_streaming_enabled"
+            />
+
+        <SwitchPreference
+            android:key="preference_omt_audio_stereo"
+            android:title="Stereo Audio"
+            android:summary="Capture in stereo if supported (falls back to mono)"
+            android:defaultValue="false"
+            android:dependency="preference_omt_audio_enabled"
+            />
+
     </PreferenceCategory>
 
 </PreferenceScreen>
