@@ -58,6 +58,17 @@ struct MediaFrame {
 };
 
 /**
+ * Audio frame information (FPA1: 32-bit float planar audio)
+ */
+struct AudioFrame {
+    const float* data;      // Planar float samples (ch0 samples, then ch1 samples, ...)
+    int sampleRate;         // e.g. 48000
+    int channels;           // Total channels
+    int samplesPerChannel;  // Samples per channel in this frame
+    int64_t timestamp;      // 100ns ticks
+};
+
+/**
  * Sender configuration
  */
 struct SenderConfig {
@@ -101,6 +112,12 @@ public:
      * @return encoded frame size in bytes, or 0 on failure
      */
     int send(const MediaFrame& frame);
+
+    /**
+     * Send an uncompressed FPA1 audio frame to all audio-subscribed clients.
+     * Returns bytes sent (payload) or 0 on failure/no clients.
+     */
+    int sendAudio(const AudioFrame& frame);
     
     /**
      * Send metadata to all connected clients

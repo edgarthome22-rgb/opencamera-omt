@@ -1,8 +1,13 @@
 package net.sourceforge.opencamera;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
 import android.media.Image;
 import android.media.ImageReader;
+import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
@@ -66,6 +71,13 @@ public class OMTStreamingManager {
     private final Context context;
     private final StreamingCallback callback;
     private OMTSender omtSender;
+
+    // Audio capture (OMT FPA1 audio) - Build 1: 48kHz mono, always on while streaming
+    private static final int AUDIO_SAMPLE_RATE = 48000;
+    private static final int AUDIO_SAMPLES_PER_FRAME = 960; // 20ms @ 48kHz
+    private AudioRecord audioRecord;
+    private Thread audioThread;
+    private volatile boolean audioRunning;
     private ImageReader imageReader;
     private HandlerThread backgroundThread;
     private Handler backgroundHandler;
@@ -207,6 +219,8 @@ public class OMTStreamingManager {
 
             isStreaming = true;
             Log.i(TAG, "OMT streaming started - camera frames will be sent");
+
+            startAudioCapture();
 
             if (callback != null) {
                 callback.onStreamingStarted();
@@ -472,6 +486,7 @@ public class OMTStreamingManager {
      * Cleanup streaming only (ImageReader), keep OMT sender and mDNS active.
      */
     private void cleanupStreaming() {
+        stopAudioCapture();
         // Release ImageReader only
         if (imageReader != null) {
             imageReader.close();
@@ -479,6 +494,108 @@ public class OMTStreamingManager {
         }
         // Clear frame buffer
         frameBuffer = null;
+    }
+
+    /**
+     * Start microphone capture and send audio to OMT receivers (FPA1, 48kHz mono).
+     * If RECORD_AUDIO permission is missing, streaming continues video-only.
+     */
+    private void startAudioCapture() {
+        if (audioRunning) {
+            return;
+        }
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "RECORD_AUDIO permission not granted - streaming video only");
+            return;
+        }
+
+        final int channelConfig = AudioFormat.CHANNEL_IN_MONO;
+        final int audioFormat = AudioFormat.ENCODING_PCM_16BIT;
+        int minBuffer = AudioRecord.getMinBufferSize(AUDIO_SAMPLE_RATE, channelConfig, audioFormat);
+        if (minBuffer == AudioRecord.ERROR || minBuffer == AudioRecord.ERROR_BAD_VALUE) {
+            Log.e(TAG, "AudioRecord.getMinBufferSize failed - streaming video only");
+            return;
+        }
+        int bufferSize = Math.max(minBuffer, AUDIO_SAMPLES_PER_FRAME * 4 /* bytes, headroom */);
+
+        try {
+            audioRecord = new AudioRecord(
+                    MediaRecorder.AudioSource.CAMCORDER,
+                    AUDIO_SAMPLE_RATE,
+                    channelConfig,
+                    audioFormat,
+                    bufferSize);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to create AudioRecord: " + e.getMessage(), e);
+            audioRecord = null;
+            return;
+        }
+
+        if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "AudioRecord failed to initialize - streaming video only");
+            audioRecord.release();
+            audioRecord = null;
+            return;
+        }
+
+        audioRunning = true;
+        audioThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+                short[] pcm = new short[AUDIO_SAMPLES_PER_FRAME];
+                float[] floats = new float[AUDIO_SAMPLES_PER_FRAME];
+                try {
+                    audioRecord.startRecording();
+                    Log.i(TAG, "OMT audio capture started (48kHz mono FPA1)");
+                    while (audioRunning) {
+                        int read = audioRecord.read(pcm, 0, AUDIO_SAMPLES_PER_FRAME);
+                        if (read <= 0) {
+                            continue;
+                        }
+                        // PCM16 -> float [-1.0, 1.0] (mono = already planar)
+                        for (int i = 0; i < read; i++) {
+                            floats[i] = pcm[i] / 32768.0f;
+                        }
+                        OMTSender sender = omtSender;
+                        if (sender != null && isStreaming) {
+                            sender.sendAudioFrame(floats, AUDIO_SAMPLE_RATE, 1, read);
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Audio capture error: " + e.getMessage(), e);
+                } finally {
+                    try {
+                        audioRecord.stop();
+                    } catch (Exception ignored) {
+                    }
+                    Log.i(TAG, "OMT audio capture stopped");
+                }
+            }
+        }, "OMTAudioCapture");
+        audioThread.start();
+    }
+
+    /**
+     * Stop microphone capture.
+     */
+    private void stopAudioCapture() {
+        audioRunning = false;
+        if (audioThread != null) {
+            try {
+                audioThread.join(1000);
+            } catch (InterruptedException ignored) {
+            }
+            audioThread = null;
+        }
+        if (audioRecord != null) {
+            try {
+                audioRecord.release();
+            } catch (Exception ignored) {
+            }
+            audioRecord = null;
+        }
     }
 
     /**

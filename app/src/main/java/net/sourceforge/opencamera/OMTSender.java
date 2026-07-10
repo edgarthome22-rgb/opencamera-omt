@@ -129,6 +129,24 @@ public class OMTSender {
     }
 
     /**
+     * Send an audio frame (32-bit float planar, FPA1).
+     *
+     * @param data              Planar float samples: all samples of channel 0,
+     *                          then channel 1, etc. Length must be at least
+     *                          samplesPerChannel * channels.
+     * @param sampleRate        Sample rate in Hz (e.g. 48000)
+     * @param channels          Number of channels (1 = mono)
+     * @param samplesPerChannel Number of samples per channel in this frame
+     * @return true if the frame was sent to at least one receiver
+     */
+    public boolean sendAudioFrame(float[] data, int sampleRate, int channels, int samplesPerChannel) {
+        if (!isInitialized) {
+            return false;
+        }
+        return nativeSendAudioFrame(data, sampleRate, channels, samplesPerChannel);
+    }
+
+    /**
      * Get the number of currently connected receivers.
      */
     public int getConnectionCount() {
@@ -226,6 +244,8 @@ public class OMTSender {
     private native boolean nativeInit(String name, int width, int height, int frameRateN, int frameRateD, int quality);
 
     private native boolean nativeSendFrame(ByteBuffer buffer, int width, int height, int yStride, int uvStride);
+
+    private native boolean nativeSendAudioFrame(float[] data, int sampleRate, int channels, int samplesPerChannel);
 
     private native int nativeGetConnectionCount();
 

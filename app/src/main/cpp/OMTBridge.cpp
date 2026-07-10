@@ -153,6 +153,59 @@ Java_net_sourceforge_opencamera_OMTSender_nativeSendFrame(
 }
 
 /**
+ * Send an audio frame (32-bit float planar, FPA1) to connected receivers.
+ * data must contain samplesPerChannel * channels floats in planar layout
+ * (all samples of channel 0, then all samples of channel 1, ...).
+ */
+JNIEXPORT jboolean JNICALL
+Java_net_sourceforge_opencamera_OMTSender_nativeSendAudioFrame(
+        JNIEnv* env,
+        jobject /* this */,
+        jfloatArray data,
+        jint sampleRate,
+        jint channels,
+        jint samplesPerChannel) {
+
+    std::lock_guard<std::mutex> lock(g_senderMutex);
+
+    if (g_sender == nullptr || data == nullptr) {
+        return JNI_FALSE;
+    }
+
+    const jsize len = env->GetArrayLength(data);
+    if (len < samplesPerChannel * channels) {
+        LOGE("Audio array too small: %d < %d", (int)len, samplesPerChannel * channels);
+        return JNI_FALSE;
+    }
+
+    jfloat* samples = env->GetFloatArrayElements(data, nullptr);
+    if (samples == nullptr) {
+        return JNI_FALSE;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto duration = now.time_since_epoch();
+    int64_t timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count() / 100;
+
+    OMTMediaFrame frame = {};
+    frame.Type = OMTFrameType_Audio;
+    frame.Codec = OMTCodec_FPA1;
+    frame.SampleRate = sampleRate;
+    frame.Channels = channels;
+    frame.SamplesPerChannel = samplesPerChannel;
+    frame.Timestamp = timestamp;
+    frame.Data = samples;
+    frame.DataLength = samplesPerChannel * channels * 4;
+
+    int result = omt_send(g_sender, &frame);
+
+    // JNI_ABORT: we only read, no need to copy back
+    env->ReleaseFloatArrayElements(data, samples, JNI_ABORT);
+
+    return result > 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+/**
  * Get the number of currently connected receivers.
  */
 JNIEXPORT jint JNICALL

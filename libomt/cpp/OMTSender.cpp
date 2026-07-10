@@ -377,6 +377,59 @@ int Sender::send(const MediaFrame& frame) {
     return totalSent > 0 ? encodedLen : 0;
 }
 
+int Sender::sendAudio(const AudioFrame& frame) {
+    // Basic validation (mirrors official libomtnet SendAudio checks)
+    if (frame.data == nullptr || frame.sampleRate <= 0 ||
+        frame.channels <= 0 || frame.channels > 32 ||
+        frame.samplesPerChannel <= 0) {
+        return 0;
+    }
+
+    cleanupDisconnected();
+    if (connectionCount() == 0) return 1;  // No clients, but not an error
+
+    const int dataLength = frame.samplesPerChannel * frame.channels * 4;
+
+    // Build headers per official OMT PROTOCOL.md
+    FrameHeader header{};
+    header.version = 1;
+    header.frameType = static_cast<uint8_t>(FrameType::Audio);
+    header.timestamp = frame.timestamp;
+    header.metadataLength = 0;
+    header.dataLength = AudioExtHeader::SIZE + dataLength;
+
+    AudioExtHeader extHeader{};
+    extHeader.codec = Codec::FPA1;
+    extHeader.sampleRate = frame.sampleRate;
+    extHeader.samplesPerChannel = frame.samplesPerChannel;
+    extHeader.channels = frame.channels;
+    // All channels stored (no silent-channel skipping in this implementation)
+    extHeader.activeChannels = (frame.channels >= 32)
+        ? 0xFFFFFFFFu
+        : ((1u << frame.channels) - 1u);
+    extHeader.reserved1 = 0;
+
+    int totalSent = 0;
+    {
+        std::lock_guard<std::mutex> lock(channelsMutex_);
+        for (const auto& ch : channels_) {
+            if (!ch->isConnected()) continue;
+
+            // Only send if client has subscribed to audio (per OMT protocol)
+            if (!ch->isAudioSubscribed()) continue;
+
+            int sent = ch->sendAsync(&header, sizeof(header),
+                                     &extHeader, sizeof(extHeader),
+                                     frame.data, dataLength);
+            if (sent > 0) {
+                totalSent += sent;
+            }
+        }
+    }
+
+    return totalSent > 0 ? dataLength : 0;
+}
+
 void Sender::sendMetadata(const std::string& xml) {
     std::lock_guard<std::mutex> lock(channelsMutex_);
     for (const auto& ch : channels_) {

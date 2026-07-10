@@ -105,7 +105,7 @@ enum class Quality {
 enum class FrameType : uint8_t {
     Metadata = 1,
     Video = 2,
-    Audio = 3
+    Audio = 4  // Per official OMT PROTOCOL.md (Metadata=1, Video=2, Audio=4)
 };
 
 // Event types (for callbacks)

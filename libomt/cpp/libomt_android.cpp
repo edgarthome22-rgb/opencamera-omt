@@ -160,7 +160,17 @@ int omt_send(omt_send_t* instance, OMTMediaFrame* frame) {
     
     auto* sender = reinterpret_cast<omt::Sender*>(instance);
     
-    // Only handle video for now
+    // Audio path: uncompressed FPA1 planar float
+    if (frame->Type == OMTFrameType_Audio) {
+        omt::AudioFrame af{};
+        af.data = reinterpret_cast<const float*>(frame->Data);
+        af.sampleRate = frame->SampleRate;
+        af.channels = frame->Channels;
+        af.samplesPerChannel = frame->SamplesPerChannel;
+        af.timestamp = frame->Timestamp;
+        return sender->sendAudio(af);
+    }
+    
     if (frame->Type != OMTFrameType_Video) return 0;
     
     omt::MediaFrame mf{};
