@@ -1225,7 +1225,14 @@ public class MyApplicationInterface extends BasicApplicationInterface {
         // 1. Check for user-defined custom name
         String customName = sharedPreferences.getString(PreferenceKeys.OmtStreamingNameKey, null);
         if (customName != null && !customName.isEmpty()) {
-            return customName;
+            // OMT protocol requires source names in the format "MachineName (SourceName)"
+            // (see official libomtnet OMTAddress.ToString()). Receivers like vMix discard
+            // announcements that don't follow this format, so wrap the custom name and
+            // strip parentheses the user may have typed to avoid nesting.
+            String safe = customName.replace("(", "").replace(")", "").trim();
+            if (!safe.isEmpty()) {
+                return getUniqueDeviceName() + " (" + safe + ")";
+            }
         }
         
         // 2. Auto-generate unique name: Model_XXXX (Camera)
